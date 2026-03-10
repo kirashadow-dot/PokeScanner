@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PokéScanner Pro+</title>
+    <script src="https://unpkg.com/tesseract.js@2.1.4/dist/tesseract.min.js"></script>
+    <style>
+        :root { --pkm-red: #ff1f1f; --pkm-blue: #3761a8; --pkm-yellow: #ffcb05; }
+        body { font-family: sans-serif; background: #f0f0f0; margin: 0; padding: 15px; text-align: center; }
+        .header { background: var(--pkm-red); color: white; padding: 10px; border-radius: 10px; margin-bottom: 15px; }
+        .btn-scan { background: var(--pkm-blue); color: white; border: none; padding: 15px; border-radius: 10px; width: 100%; font-size: 18px; font-weight: bold; box-shadow: 0 4px #2a4a80; }
+        .btn-scan:active { transform: translateY(2px); box-shadow: 0 2px #2a4a80; }
+        .card { background: white; border-radius: 15px; padding: 15px; margin-top: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        .stat-line { display: flex; justify-content: space-between; border-bottom: 1px solid #eee; padding: 8px 0; font-size: 16px; }
+        .total-box { background: var(--pkm-yellow); font-weight: bold; padding: 12px; border-radius: 8px; margin-top: 15px; font-size: 18px; }
+        #preview { width: 100%; border-radius: 10px; margin-bottom: 10px; border: 1px solid #ddd; }
+        #status { margin: 15px; font-weight: bold; color: #555; }
+    </style>
+</head>
+<body>
+
+    <div class="header"><h1>PokéScanner Pro+</h1></div>
+    <input type="file" id="foto" accept="image/*" style="display:none">
+    <button class="btn-scan" onclick="document.getElementById('foto').click()">📸 ANALIZAR CAPTURA</button>
+    <div id="status">Listo para escanear</div>
+
+    <div class="card" id="resultado" style="display:none">
+        <img id="preview">
+        <h2 id="pkm-name" style="text-transform: uppercase; color: var(--pkm-blue); margin: 10px 0;">---</h2>
+        <div id="stats-list"></div>
+        <div class="total-box" id="total-val">TOTAL: --</div>
+        <div id="evo-info" style="margin-top:15px; padding:10px; background:#e3f2fd; border-radius:8px; font-size:14px; color:#1565c0;"></div>
+    </div>
+
+<script>
+    const foto = document.getElementById('foto');
+    const status = document.getElementById('status');
+
+    foto.onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (r) => { document.getElementById('preview').src = r.target.result; };
+        reader.readAsDataURL(file);
+
+        document.getElementById('resultado').style.display = "block";
+        status.innerText = "⏳ Leyendo imagen... (esto tarda unos segundos)";
+
+        Tesseract.recognize(file, 'spa')
+            .then(({ data: { text } }) => {
+                status.innerText = "🔍 Buscando en PokéAPI...";
+                procesarDatos(text);
+            })
+            .catch(err => {
+                status.innerText = "❌ Error al leer la imagen.";
+                console.error(err);
+            });
+    };
+
+    async function procesarDatos(textoRaw) {
+        const lineas = textoRaw.toLowerCase().split('\n');
+        let nombre = "golett"; // Valor por defecto
+
+        // 1. Identificar el nombre buscando palabras clave
+        for(let l of lineas) {
+            if(l.includes('pokédex') || l.includes('n.')) {
+                const palabras = l.match(/[a-z]+/g) || [];
+                for(let p of palabras) {
+                    if(p.length > 4 && p !== 'pokédex') { nombre = p; break; }
+                }
+            }
+        }
+
+        // 2. Extraer números y filtrar los que parecen estadísticas reales (20-200)
+        const todosLosNumeros = textoRaw.match(/\d+/g) || [];
+        const statsFiltradas = todosLosNumeros.map(Number).filter(n => n > 15 && n < 250);
+        
+        // Tomamos los últimos 6 números encontrados, que suelen ser las estadísticas en orden
+        const statsFinales = statsFiltradas.slice(-6); 
+
+        try {
+            const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${nombre}`);
+            const data = await res.json();
+            
+            document.getElementById('pkm-name').innerText = data.name;
+            
+            const etiquetas = ["PS", "Ataque", "Defensa", "At. Esp.", "Def. Esp.", "Velocidad"];
+            let html = "";
+            let suma = 0;
+
+            etiquetas.forEach((et, i) => {
+                let valor = statsFinales[i] || 0;
+                suma += valor;
+                html += `<div class="stat-line"><span>${et}</span><span>${valor}</span></div>`;
+            });
+
+            document.getElementById('stats-list').innerHTML = html;
+            document.getElementById('total-val').innerText = `SUMA TOTAL: ${suma}`;
+
+            // Datos de Evolución
+            const spRes = await fetch(data.species.url);
+            const spData = await spRes.json();
+            const evRes = await fetch(spData.evolution_chain.url);
+            const evData = await evRes.json();
+
+            let txtEvo = "¡Etapa final alcanzada!";
+            let chain = evData.chain;
+
+            if(chain.species.name === data.name && chain.evolves_to.length > 0) {
+                txtEvo = `Evoluciona a ${chain.evolves_to[0].species.name.toUpperCase()}`;
+            } else if(chain.evolves_to.length > 0 && chain.evolves_to[0].species.name === data.name) {
+                if(chain.evolves_to[0].evolves_to.length > 0) {
+                    txtEvo = `Evoluciona a ${chain.evolves_to[0].evolves_to[0].species.name.toUpperCase()}`;
+                }
+            }
+            
+            document.getElementById('evo-info').innerHTML = `<strong>Evolución:</strong><br>${txtEvo}`;
+            status.innerText = "✅ Análisis completado con éxito";
+
+        } catch (e) {
+            status.innerText = "⚠️ No se reconoció el nombre, pero se extrajeron números.";
+            document.getElementById('pkm-name').innerText = "Pokémon desconocido";
+        }
+    }
+</script>
+</body>
+</html>
