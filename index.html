@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PokéAnalizador Pro - GitHub Edition</title>
+    <script src="https://unpkg.com/tesseract.js@2.1.4/dist/tesseract.min.js"></script>
+    <style>
+        :root { --pkm-red: #ff1f1f; --pkm-blue: #3761a8; --pkm-yellow: #ffcb05; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f4f4; margin: 0; padding: 15px; text-align: center; }
+        .header { background: var(--pkm-red); color: white; padding: 15px; border-radius: 0 0 20px 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); margin: -15px -15px 20px -15px; }
+        .btn-main { background: var(--pkm-blue); color: white; border: none; padding: 15px; border-radius: 10px; width: 100%; font-size: 18px; font-weight: bold; cursor: pointer; border-bottom: 4px solid #2a4a80; }
+        .btn-main:active { transform: translateY(2px); border-bottom: 2px solid #2a4a80; }
+        .card { background: white; border-radius: 15px; padding: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); margin-top: 20px; display: none; }
+        #preview { width: 100%; border-radius: 10px; margin-bottom: 15px; border: 1px solid #ddd; }
+        .stat-line { display: flex; justify-content: space-between; border-bottom: 1px solid #eee; padding: 8px 0; font-size: 16px; }
+        .total-box { background: var(--pkm-yellow); font-weight: bold; padding: 12px; border-radius: 8px; margin-top: 15px; font-size: 18px; }
+        .evo-info { background: #e3f2fd; color: #1565c0; padding: 12px; border-radius: 8px; margin-top: 15px; border-left: 5px solid var(--pkm-blue); font-size: 14px; text-align: left; }
+        #status { margin: 15px; font-weight: bold; color: #555; font-size: 14px; }
+        .history-badge { font-size: 12px; color: #888; margin-top: 20px; display: block; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>PokéAnalizador Móvil</h1>
+    </div>
+
+    <input type="file" id="input-file" accept="image/*" style="display:none">
+    <button class="btn-main" onclick="document.getElementById('input-file').click()">📸 ANALIZAR CAPTURA</button>
+
+    <div id="status">Esperando imagen...</div>
+
+    <div class="card" id="result-card">
+        <img id="preview">
+        <h2 id="pk-name" style="text-transform: capitalize; color: var(--pkm-blue);">---</h2>
+        
+        <div id="stats-container"></div>
+        
+        <div class="total-box" id="stat-total">Total: --</div>
+        
+        <div class="evo-info">
+            <strong>Evolución:</strong>
+            <p id="pk-evo" style="margin: 5px 0;">Buscando datos...</p>
+        </div>
+    </div>
+
+    <span class="history-badge" id="last-saved"></span>
+
+<script>
+    const inputFile = document.getElementById('input-file');
+    const status = document.getElementById('status');
+    const resultCard = document.getElementById('result-card');
+
+    // Al cargar, mostrar el último guardado si existe
+    window.onload = () => {
+        const last = localStorage.getItem('last_pkm');
+        if(last) document.getElementById('last-saved').innerText = "Último análisis: " + last;
+    };
+
+    inputFile.onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        // Mostrar previsualización
+        const reader = new FileReader();
+        reader.onload = (re) => {
+            document.getElementById('preview').src = re.target.result;
+            resultCard.style.display = "block";
+        };
+        reader.readAsDataURL(file);
+
+        status.innerText = "⏳ Leyendo imagen (OCR)...";
+
+        // Iniciar reconocimiento de texto
+        Tesseract.recognize(file, 'spa')
+            .then(({ data: { text } }) => {
+                status.innerText = "🔍 Buscando en PokéAPI...";
+                procesarPokemon(text);
+            })
+            .catch(err => {
+                status.innerText = "❌ Error al procesar imagen.";
+                console.error(err);
+            });
+    };
+
+    async function procesarPokemon(texto) {
+        // 1. Extraer estadísticas (números entre 10 y 400)
+        const numeros = texto.match(/\d+/g) || [];
+        const stats = numeros.map(Number).filter(n => n > 10 && n < 400).slice(0, 6);
+        
+        // 2. Intentar encontrar el nombre del Pokémon
+        const palabras = texto.toLowerCase().match(/[a-zñáéíóú]+/g) || [];
+        let nombreFinal = "golett"; // Por defecto si falla
+
+        for (let p of palabras) {
+            if (p.length > 4) {
+                try {
+                    const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${p}`);
+                    if (res.ok) { nombreFinal = p; break; }
+                } catch(e) {}
+            }
+        }
+
+        // 3. Consultar datos evolutivos y oficiales
+        try {
+            const pkRes = await fetch(`https://pokeapi.co/api/v2/pokemon/${nombreFinal}`);
+            const pkData = await pkRes.json();
+            
+            const spRes = await fetch(pkData.species.url);
+            const spData = await spRes.json();
+            
+            const evoRes = await fetch(spData.evolution_chain.url);
+            const evoData = await evoRes.json();
+
+            actualizarInterfaz(nombreFinal, stats, evoData);
+            status.innerText = "✅ ¡Análisis completado!";
+        } catch (error) {
+            status.innerText = "⚠️ Pokémon no identificado plenamente.";
+        }
+    }
+
+    function actualizarInterfaz(nombre, stats, evo) {
+        document.getElementById('pk-name').innerText = nombre;
+        
+        const labels = ["PS", "Ataque", "Defensa", "At. Esp.", "Def. Esp.", "Velocidad"];
+        let htmlStats = "";
+        let suma = 0;
+
+        labels.forEach((l, i) => {
+            let v = stats[i] || 0;
+            suma += v;
+            htmlStats += `<div class="stat-line"><span>${l}</span><span>${v}</span></div>`;
+        });
+
+        document.getElementById('stats-container').innerHTML = htmlStats;
+        document.getElementById('stat-total').innerText = `TOTAL ESTADÍSTICAS: ${suma}`;
+
+        // Lógica de evolución
+        let infoEvo = "No se encontraron más evoluciones.";
+        let chain = evo.chain;
+
+        // Búsqueda simple en la cadena
+        if (chain.species.name === nombre && chain.evolves_to.length > 0) {
+            let nxt = chain.evolves_to[0];
+            let lvl = nxt.evolution_details[0]?.min_level;
+            infoEvo = `Evoluciona a ${nxt.species.name.toUpperCase()} ${lvl ? 'al nivel ' + lvl : '(Método especial)'}.`;
+        } else if (chain.evolves_to.length > 0 && chain.evolves_to[0].species.name === nombre) {
+            if (chain.evolves_to[0].evolves_to.length > 0) {
+                let nxt2 = chain.evolves_to[0].evolves_to[0];
+                infoEvo = `Evoluciona a ${nxt2.species.name.toUpperCase()} (Etapa final).`;
+            } else {
+                infoEvo = "¡Está en su etapa final!";
+            }
+        }
+
+        document.getElementById('pk-evo').innerText = infoEvo;
+        
+        // Guardar en memoria local
+        const saveStr = `${nombre.toUpperCase()} (Total: ${suma})`;
+        localStorage.setItem('last_pkm', saveStr);
+        document.getElementById('last-saved').innerText = "Último análisis: " + saveStr;
+    }
+</script>
+</body>
+</html>
